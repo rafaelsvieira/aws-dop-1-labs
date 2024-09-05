@@ -1,0 +1,17 @@
+version: 0.2
+
+phases:
+  install:
+    runtime-versions:
+      python: 3.12
+    commands:
+      - pip install awscli --upgrade --user
+      # - aws codeartifact login --tool pip --domain my_domain --domain-owner 111122223333 --repository my_repo
+  build:
+    commands:
+      - cd app/
+      - TMP_FOLDER=$(mktemp -d)
+      - pip install -r requirements.txt -t $TMP_FOLDER
+      - cp src/* $TMP_FOLDER/
+      - cd $TMP_FOLDER
+      - zip -r9 ../app.zip .
