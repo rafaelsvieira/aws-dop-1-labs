@@ -1,0 +1,58 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: 'AWS::Serverless-2016-10-31'
+Description: 'SAM Template for Blue-Green Deployment with AWS Lambda'
+
+Parameters:
+  S3BucketName:
+    Description: The name of the S3 bucket that contains the Lambda function zip file.
+    Type: String
+  S3Key:
+    Description: The Amazon S3 key of the Lambda function zip file.
+    Type: String
+
+Globals:
+  Function:
+    Timeout: 30
+    MemorySize: 128
+    Runtime: python3.12
+
+Resources:
+  LambdaApp:
+    Type: 'AWS::Serverless::Function'
+    Properties:
+      FunctionName: 'LambdaApp'
+      Handler: handler.lambda_handler
+      CodeUri:
+        Bucket: !Ref S3BucketName
+        Key: !Ref S3Key
+      Description: 'LambdaApp'
+      AutoPublishAlias:
+        Description: 'Production Alias'
+        Name: 'prod'
+        DeploymentPreference:
+          Type: 'Linear10PercentEvery1Minute'
+          Role: !Ref CodeDeployServiceRole
+
+  CodeDeployServiceRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: 'Allow'
+            Principal:
+              Service: 'codedeploy.amazonaws.com'
+            Action: 'sts:AssumeRole'
+      Policies:
+        - PolicyName: 'CodeDeployPolicy'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: 'Allow'
+                Action:
+                  - 'lambda:UpdateFunctionCode'
+                  - 'lambda:UpdateAlias'
+                  - 'lambda:CreateAlias'
+                  - 'lambda:GetFunctionConfiguration'
+                  - 'codedeploy:*'
+                Resource: '*'

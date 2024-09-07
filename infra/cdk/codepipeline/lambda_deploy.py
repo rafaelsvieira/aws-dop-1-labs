@@ -1,6 +1,7 @@
 from aws_cdk import (
     Stack,
     RemovalPolicy,
+    CfnCapabilities,
     aws_codepipeline as codepipeline,
     aws_s3 as s3,
     aws_codebuild as codebuild,
@@ -15,15 +16,15 @@ class CodePipelineStack(Stack):
     def __init__(self, scope: Construct, construct_id: str, **kwargs) -> None:
         super().__init__(scope, construct_id, **kwargs)
         self.buildspec_path = "infra/cdk/codepipeline/buildspec"
-        bucket = self._get_bucket_s3('artifacts-pipeline')
+        self.infra_lambda_path = "infra/cloudformation/lambda.yml"
         source_action, source_output = self._get_source()
-        environment_variables={
-            "BUCKET_NAME": codebuild.BuildEnvironmentVariable(
-                value=bucket.bucket_name
-            )
-        }
-        test_action = self._get_codebuild_stage('Test', 'TEST', 1, source_output)
-        build_action = self._get_codebuild_stage('Build', 'BUILD', 1, source_output, environment_variables)
+        bucket = self._get_bucket_s3('artifacts-pipeline')
+
+        test_action, _ = self._get_codebuild_action('Test', 'TEST', source_output)
+        build_action, build_output = self._get_codebuild_action('Build', 'BUILD', source_output)
+        infra_action = self._get_cloudformation_action('Deploy', 'LambdaDeploy', source_output, build_output)
+        approval_action = self._get_approval_action(1)
+        destroy_infra_action = self._get_delete_cloudformation_action('Destroy', 'LambdaDestroy', 2)
 
         pipeline = codepipeline.Pipeline(self, "pipeline-lambda-deploy",
             artifact_bucket=bucket,
@@ -38,6 +39,17 @@ class CodePipelineStack(Stack):
                     actions=[
                         build_action,
                         test_action
+                    ]
+                ),
+                codepipeline.StageProps(
+                    stage_name="CD",
+                    actions=[infra_action]
+                ),
+                codepipeline.StageProps(
+                    stage_name="Destroy",
+                    actions=[
+                        approval_action,
+                        destroy_infra_action
                     ]
                 )
             ]
@@ -67,19 +79,19 @@ class CodePipelineStack(Stack):
         else:
             raise Exception("No connection found")
 
-    def _get_codebuild_stage(self, action_name, action_type, run_order, source_input, environment_variables={}):
+    def _get_codebuild_action(self, action_name, action_type, source_input):
         build_spec = codebuild.BuildSpec.from_source_filename(f"{self.buildspec_path}/{action_name.lower()}.yml")
         project = codebuild.PipelineProject(self, action_name.title(), build_spec=build_spec)
-        build_action = codepipeline_actions.CodeBuildAction(
+        codebuild_output = codepipeline.Artifact()
+        codebuild_action = codepipeline_actions.CodeBuildAction(
             action_name=action_name.title(),
             project=project,
             input=source_input,
-            run_order=run_order,
-            environment_variables=environment_variables,
+            outputs=[codebuild_output],
             type=getattr(codepipeline_actions.CodeBuildActionType, action_type.upper())
         )
 
-        return build_action
+        return codebuild_action, codebuild_output
 
     def _get_bucket_s3(self, bucket_name):
         return s3.Bucket(
@@ -88,3 +100,31 @@ class CodePipelineStack(Stack):
                     auto_delete_objects=True,
                     removal_policy=RemovalPolicy.DESTROY
                 )
+
+    def _get_cloudformation_action(self, action_name, stack_name, source_input, build_output):
+        return codepipeline_actions.CloudFormationCreateUpdateStackAction(
+            action_name=action_name,
+            stack_name=stack_name,
+            admin_permissions=True,
+            cfn_capabilities=[CfnCapabilities.AUTO_EXPAND],
+            template_path=source_input.at_path(self.infra_lambda_path),
+            extra_inputs=[build_output],
+            parameter_overrides={
+                "S3BucketName": build_output.bucket_name,
+                "S3Key": build_output.object_key
+            },
+        )
+
+    def _get_delete_cloudformation_action(self, action_name, stack_name, run_order):
+        return codepipeline_actions.CloudFormationDeleteStackAction(
+            action_name=action_name,
+            stack_name=stack_name,
+            admin_permissions=True,
+            run_order=run_order,
+        )
+    def _get_approval_action(self,run_order):
+        return codepipeline_actions.ManualApprovalAction(
+            action_name="ManualApproval",
+            additional_information="Approve to deploy",
+            run_order=run_order
+        )

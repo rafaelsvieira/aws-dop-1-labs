@@ -11,7 +11,8 @@ phases:
     commands:
       - cd app/
       - TMP_FOLDER=$(mktemp -d)
-      - pip install -r requirements.txt -t $TMP_FOLDER
-      - cp src/* $TMP_FOLDER/
-      - cd $TMP_FOLDER
-      - zip -r9 ../app.zip .
+      - pip install -r requirements.txt -t src/
+artifacts:
+  files:
+    - '**/*'
+  base-directory: app/src
